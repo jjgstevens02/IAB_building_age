@@ -1,0 +1,131 @@
+s---
+title: "Building_Extraction"
+author: "Jack Stevens"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r path set up }
+#
+# Building extraction set up 
+# Prior to running this model you need to acquire fly your own LiDAR point cloud(S)
+# Make sure to classify buildings in your point cloud. 
+# This is possible through ArcGIS deeplearning, most proprietary LiDAR software, or if you are working with LiDAR from a third party that has already been classified
+#
+# Fill out all lines of code below with your own file paths and then you can run all. Be sure to enter a region ID before letting run. 
+
+regionID <- readline(prompt = "Enter region name: ")
+Las_cat_path <- # Add folder of all of your LiDAR data 
+  
+laz_path <- #Add path to single LiDAR file if only using one
+                                                                                                                                                                                                                                                                                                                                                       
+gpkg_path <- file.path("ADD WHERE YOU WANT TO CREATE YOUR GEOPACKAGE HERE", paste0(regionID,"_building_points.gpkg"))
+gpkg_layer <- paste0(regionID,"_building_points")
+
+### If you want to use Arc GIS to do run building extraction fill this section out
+### If not comment out
+gdb_path <- "ADD YOUR PATH HERE"
+gdb_input_fc <- paste0(gdb_path, "/building_points")
+gdb_output_fc <- paste0(gdb_path, "/buildings")
+
+arcgis_python <- "ADD YOUR PATH TO ARCGIS PYTHON HERE"
+shapefile_output <- file.path("ADD WHERE YOU WANT TO CREATE YOUR SHAPEFILE HERE", paste0(regionID,"_buildings.shp"))
+```
+
+
+```{r loading packages}
+library(reticulate)
+library(lidR)
+library(sf)
+library(RCSF)
+library(concaveman)
+
+# Use ArcGIS Pro Python environment
+use_python(arcgis_python, required = TRUE)
+arcpy <- import("arcpy")
+arcpy$env$overwriteOutput <- TRUE
+use_python(arcgis_python, required = TRUE)
+py_require()
+
+```
+
+```{r lascatalog}
+#loading in LiDAR data
+ctg <- readLAScatalog(Las_cat_path)
+las_check(ctg)
+
+#normalizing height
+opt_output_files(ctg) <-  paste0(tempdir(), "/{*}_norm")
+ctg_norm <- normalize_height(ctg, tin())
+
+#filtering out all classified buildings
+opt_output_files(ctg_norm) <- paste0("D:/FireSage/FireSage/HIZ_Modeling/results/PAR/LiDAR/{ID}_building")
+opt_filter(ctg_norm) <- "-keep_class 6 -drop_z_below 0 "
+opt_laz_compression(ctg_norm) <- TRUE
+
+#create Filtered LiDAR point cloud
+buildings <- readLAS(ctg_norm)
+plot(buildings)
+
+```
+
+
+```{r extracting building points}
+
+# Convert LiDAR to sf POINT layer
+sf_buildings <- st_as_sf(buildings@data, coords = c("X", "Y"), crs = st_crs(buildings))
+
+st_write(sf_buildings,dsn = gpkg_path,layer = gpkg_layer,delete_layer = TRUE)
+```
+
+
+```{r gbd SET UP}
+if (!dir.exists(gdb_path)) {
+  arcpy$management$CreateFileGDB(
+    out_folder_path = dirname(gdb_path),
+    out_name = basename(gdb_path)
+  )
+}
+
+arcpy$management$CopyFeatures(
+  in_features = paste0(gpkg_path, "/", gpkg_layer),
+  out_feature_class = gdb_input_fc
+)
+
+```
+
+```{r aggregating points}
+# First run AggregatePoints to a GDB
+arcpy$cartography$AggregatePoints(
+  in_features = gdb_input_fc,
+  out_feature_class = gdb_output_fc,  # this is your GDB path
+  aggregation_distance = "4.5 Feet"
+)
+
+
+if (arcpy$Exists(shapefile_output)) {
+  arcpy$management$Delete(shapefile_output)
+}
+
+arcpy$management$CopyFeatures(
+  in_features = gdb_output_fc,
+  out_feature_class = shapefile_output
+)
+
+
+```
+
+
+```{r NON ARCGIS Aggregating points}
+
+#
+#poly_concave <- concaveman(sf_buildings)
+#
+#st_write(poly_concave, shapefile_output)
+#
+
+```
